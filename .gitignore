@@ -1,0 +1,6 @@
+screenlog.*
+*.bin
+*.dat
+*.ver
+*.perm
+.vscode
