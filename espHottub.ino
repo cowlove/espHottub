@@ -1,4 +1,4 @@
-//#include "jimlib.h"
+#include "jimlib.h"
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <WiFiClientSecure.h>
@@ -10,7 +10,10 @@
 
 #include "PubSubClient.h"
 #include "ArduinoOTA.h"
+#include "RollingLeastSquares.h"
+#include "OneWireNg_CurrentPlatform.h"
 
+#if NOMORE
 String Sfmt(const char *format, ...) { 
     va_list args;
     va_start(args, format);
@@ -19,6 +22,7 @@ String Sfmt(const char *format, ...) {
     va_end(args);
 	return String(buf);
 }
+
 
 
 class EggTimer {
@@ -46,25 +50,37 @@ public:
 	}
 };
 
-
+#endif
 
 //JimWiFi jw("MOF-Guest", "");
 //JimWiFi jw;
 
 struct {
 	int led = 5;
-	int powerControlPin = 18;
+	int relay = 25;
+	int tempSense = 35;
+	int tempAdjust = 18;
+//	int i2cTemp = 26;
 } pins;
 
 #if 1 
 void mqttCallback(char* topic, byte* payload, unsigned int length);
+
+String getMacAddress() {
+	uint8_t baseMac[6];
+	// Get MAC address for WiFi station
+	esp_read_mac(baseMac, ESP_MAC_WIFI_STA);
+	char baseMacChr[18] = {0};
+	sprintf(baseMacChr, "%02X:%02X:%02X:%02X:%02X:%02X", baseMac[0], baseMac[1], baseMac[2], baseMac[3], baseMac[4], baseMac[5]);
+	return String(baseMacChr);
+}
 
 class MQTTClient { 
 	WiFiClient espClient;
 	String topicPrefix, server;
 public:
 	PubSubClient client;
-	MQTTClient(const char *s, const char *t) : server(s), topicPrefix(t), client(espClient) {}
+	MQTTClient(const char *s, const char *t) : topicPrefix(t), server(s), client(espClient) {}
 	void publish(const char *suffix, const char *m) { 
 		String t = topicPrefix + "/" + suffix;
 		client.publish(t.c_str(), m);
@@ -73,18 +89,18 @@ public:
 		 publish(suffix, m.c_str()); 
 	}
 	void reconnect() {
-	// Loop until we're reconnected
 		if (WiFi.status() != WL_CONNECTED || client.connected()) 
 			return;
 		
-		Serial.print("Attempting MQTT connection...");
+		Serial.printf("Attempting MQTT connection...client.connected()=%d\n", client.connected());
 		client.setServer(server.c_str(), 1883);
 		client.setCallback(mqttCallback);
-		if (client.connect(topicPrefix.c_str())) {
-			Serial.println("connected");
+		String user = topicPrefix + getMacAddress();
+		if (client.connect(user.c_str())) {
 			// ... and resubscribe
 			client.subscribe((topicPrefix + "/in").c_str());
 			client.setCallback(mqttCallback);
+			Serial.printf("Connected! client.connected()=%d\n", client.connected());
 		} else {
 			Serial.print("failed, rc=");
 			Serial.print(client.state());
@@ -105,19 +121,36 @@ public:
  };
 
 
-MQTTClient mqtt("192.168.4.1", "lowpow");
+
+MQTTClient mqtt("192.168.4.1", "hottub");
+
+
+void tempAdjust(int pct) { 
+	if (pct > 0 && pct <= 100) { 
+		ledcSetup(0, 1000, 16); // channel 1, 50 Hz, 16-bit width
+		ledcAttachPin(pins.tempAdjust, 0);   // GPIO 33 assigned to channel 1
+		ledcWrite(0, pct * 65535 / 100);
+	} else { 
+		ledcDetachPin(pins.tempAdjust);
+		pinMode(pins.tempAdjust, INPUT);
+	}
+}
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
-  std::string p;
-  for (int i = 0; i < length; i++) {
-    Serial.print((char)payload[i]);
-	p += (char)payload[i];
-  }
-  mqtt.publish("heater/out", "got mqtt message");
-  Serial.println();
+	Serial.print("Message arrived [");
+	Serial.print(topic);
+	Serial.print("] ");
+	std::string p;
+	for (int i = 0; i < length; i++) {
+		Serial.print((char)payload[i]);
+		p += (char)payload[i];
+	}
+	mqtt.publish("heater/out", "got mqtt message");
+	Serial.println();
+
+	int pct = -1;
+	sscanf(p.c_str(), "tempadj %d", &pct);
+	tempAdjust(pct);
 }
 
 #endif
@@ -177,6 +210,10 @@ void WiFiAutoConnect() {
 	WiFi.begin(aps[bestMatch].name, aps[bestMatch].pass);
 }
 
+
+#define OWNG OneWireNg_CurrentPlatform 
+OWNG *ow; 
+
 void setup() {
 	Serial.begin(921600, SERIAL_8N1);
 	Serial.println("Restart");	
@@ -184,253 +221,81 @@ void setup() {
 	esp_task_wdt_init(60, true);
 	esp_task_wdt_add(NULL);
 
-	//pinMode(35, INPUT);
-	//analogSetSamples(255);
-
 	pinMode(pins.led, OUTPUT);
+	pinMode(pins.relay, OUTPUT);
 	digitalWrite(pins.led, 0);
-	pinMode(pins.powerControlPin, INPUT);
+	digitalWrite(pins.relay, 0);
+
+	ow = new OWNG(27, true);
 
 	WiFiAutoConnect();
 	ArduinoOTA.begin();
 }
 
-EggTimer sec(2000), minute(60000);
-EggTimer blink(100);
 int loopCount = 0;
 
 float avgAnalogRead(int pin) { 
 	float bv = 0;
 	const int avg = 1024;
 	for (int i = 0; i < avg; i++) {
+		delayMicroseconds(10);
 		bv += analogRead(pin);
 	}
 	return bv / avg;
 }
 
-int hex2bin(const char *in, char *out, int l) { 
-        for (const char *p = in; p < in + l ; p += 2) { 
-                char b[3];
-                b[0] = p[0];
-                b[1] = p[1];
-                b[2] = 0;
-                int c;
-                sscanf(b, "%x", &c);
-                *(out++) = c;
-        }
-        return l / 2;
+float readTemp() { 
+	std::vector<DsTempData> t = readTemps(ow);
+	return t.size() > 0 ? t[0].degC : 0;
 }
 
-void webUpgrade(const char *u) {
-	WiFiClientSecure wc;
-	wc.setInsecure();
-	HTTPClient client; 
-
-	int offset = 0;
-	int len = 1024 * 16;
-	int errors = 0;
- 
-	Update.begin(UPDATE_SIZE_UNKNOWN);
-	Serial.println("Updating firmware...");
-
-	while(true) { 
-		String url = String(u) + Sfmt("?len=%d&offset=%d", len, offset);
-		dbg("offset %d, len %d, url %s", offset, len, url.c_str());
-		client.begin(wc, url);
-		int resp = client.GET();
-		//dbg("HTTPClient.get() returned %d\n", resp);
-		if(resp != 200) {
-			dbg("Get failed\n");
-			Serial.print(client.getString());
-			delay(5000);
-			if (++errors > 10) { 
-				return;
-			}
-			continue;
-		}
-		int currentLength = 0;
-		int	totalLength = client.getSize();
-		int len = totalLength;
-		uint8_t bbuf[128], tbuf[256];
-	
-		//Serial.printf("FW Size: %u\n",totalLength);
-		if (totalLength == 0) { 
-			Serial.printf("\nUpdate Success, Total Size: %u\nRebooting...\n", currentLength);
-			Update.end(true);
-			ESP.restart();
-			return;				
-		}
-		
-		
-		WiFiClient * stream = client.getStreamPtr();
-		while(client.connected() && len > 0) {
-			size_t avail = stream->available();
-			if(avail) {
-				esp_task_wdt_reset();
-				int c = stream->readBytes(tbuf, ((avail > sizeof(tbuf)) ? sizeof(tbuf) : avail));
-				if (c > 0) {
-					hex2bin((const char *)tbuf, (char *)bbuf, c);
-					//dbg("Update with %d", c / 2);
-					Update.write(bbuf, c / 2);
-					if(len > 0) {
-						len -= c;
-					}
-				}
-			}
-			delay(1);
-		}	
-		client.end();
-		offset += totalLength / 2;
-	}
-}
-
+TwoStageRollingAverage<float,300,10> avg1;
+//RollingAverage<float,300> avg1;
+EggTimer sec(60000), minute(60000);
+EggTimer blink(100);
 
 int firstLoop = 1;
 float bv1, bv2;
+int heat = 0;
 void loop() {
 	esp_task_wdt_reset();
-	//jw.run();
 	mqtt.run();
 	ArduinoOTA.handle();
-    //if (jw.updateInProgress) {
-	//		return;
-	//}
 
-	if (0 && blink.tick()) { 
+	if (blink.tick()) { 
 		digitalWrite(pins.led, !digitalRead(pins.led));
+		avg1.add(avgAnalogRead(pins.tempSense));	
 	}	
 	
 	if (sec.tick()) {
-		if (1) { 
-			int p = 25;
-			pinMode(p, OUTPUT);
-			digitalWrite(p, !digitalRead(p));
-			dbg("OUTPUT %d\n", digitalRead(p));
-			dbg("adc: %6.1f %6.1f", avgAnalogRead(35), avgAnalogRead(33));
-		
-            dbg("%d %s    " __BASE_FILE__ "   " __DATE__ "   " __TIME__ "   0x%08x: ", 
-			(int)(millis() / 1000), WiFi.localIP().toString().c_str(), /*(int)ESP.getEfuseMac()*/0);
-		
-			if (0) { 
-				delay(1000);
-				dbg("SLEEP %d\n", digitalRead(p));
-				gpio_hold_en((gpio_num_t)p);
-				gpio_deep_sleep_hold_en();
-				delay(100);
-				esp_sleep_enable_timer_wakeup(3LL * uS_TO_S_FACTOR);
-				//esp_light_sleep_start();
-				gpio_hold_dis((gpio_num_t)p);
-				dbg("WAKE %d\n", digitalRead(p));
+		float temp = readTemp();
+	
+		if (0) { 
+			pinMode(pins.relay, OUTPUT);
+			const int setTemp = 1900;
+			if (avg1.average() > setTemp) { 
+				digitalWrite(pins.relay, 1);
 			}
-			return;
-		}		
-
-		int status = 0;
-		if (firstLoop) { 
-			bv1 = avgAnalogRead(35);
-			bv2 = avgAnalogRead(33);
-			firstLoop = 0;
-			if (bv1 < 2460) {
-				pinMode(pins.powerControlPin, OUTPUT);
-				digitalWrite(pins.powerControlPin, 1);
-			}
-		}
-		
-		if (WiFi.status() == WL_CONNECTED) {
-
-			WiFiClientSecure wc;
-			wc.setInsecure();
-			//wc.setFingerprint(fingerprint);
-			HTTPClient client;
-			int r = client.begin(wc, "https://thingproxy.freeboard.io/fetch/https://vheavy.com/log");
-			dbg("http.begin() returned %d\n", r);
-		
-			String mac = WiFi.macAddress();
-			mac.replace(":", "");
-			String s = Sfmt("{\"GIT_VERSION\":\"%s\",", GIT_VERSION) + 
-				Sfmt("\"MAC\":\"%s\",", mac.c_str()) + 
-				Sfmt("\"Power12V\":%d,", digitalRead(pins.powerControlPin)) + 
-				Sfmt("\"Tiedown.BatteryVoltage1\":%.1f,", bv1) + 
-				Sfmt("\"Tiedown.BatteryVoltage2\":%.1f}\n", bv2);
-
-			client.addHeader("Content-Type", "application/json");
-			r = client.POST(s.c_str());
-			//r = client.GET();
-			s =  client.getString();
-			client.end();
-		
-			dbg("http.POST() returned %d and %s\n", r, s.c_str());
-		
-			StaticJsonDocument<1024> doc;
-			DeserializationError error = deserializeJson(doc, s);
-			const char *ota_ver = doc["ota_ver"];
-			status = doc["status"];
-
-			if (ota_ver != NULL) { 
-				if (strcmp(ota_ver, GIT_VERSION) == 0
-					// dont update an existing -dirty unless ota_ver is also -dirty  
-					|| (strstr(GIT_VERSION, "-dirty") != NULL && strstr(ota_ver, "-dirty") == NULL)
-					) {
-					dbg("OTA version '%s', local version '%s', no upgrade needed\n", ota_ver, GIT_VERSION);
-				} else { 
-					dbg("OTA version '%s', local version '%s', upgrading...\n", ota_ver, GIT_VERSION);
-					webUpgrade("https://thingproxy.freeboard.io/fetch/https://vheavy.com/ota");
-				}	
-			}	  
-
-			if (status == 1) {
-				if (digitalRead(pins.powerControlPin) == 1) {
-					// ESP lipo battery is low, charge it by light sleeping a while with 12V on  
-					dbg("SUCCESS, LIGHT SLEEPING");
-					//adc_power_off();
-					WiFi.disconnect(true);  // Disconnect from the network
-					WiFi.mode(WIFI_OFF);    // Switch WiFi off
-
-					if (1) {
-						// investigate why light_sleep isn't working 
-						for(int i = 0; i < 23 * 60; i++) {
-							esp_task_wdt_reset();
-							delay(1000);
-						}
-						ESP.restart();
-					}
-					gpio_hold_en((gpio_num_t)pins.powerControlPin);
-					gpio_deep_sleep_hold_en();
-					delay(100);
-
-					esp_sleep_enable_timer_wakeup(23LL * 60 * uS_TO_S_FACTOR);
-					esp_deep_sleep_start();
-									
-					digitalWrite(pins.led, 0);
-					gpio_hold_dis((gpio_num_t)pins.powerControlPin);
-					pinMode(pins.powerControlPin, INPUT);
-					delay(100);
-					ESP.restart();					
-				} else { 
-					dbg("SUCCESS, DEEP SLEEPING");
-					digitalWrite(pins.led, 0);
-					pinMode(pins.powerControlPin, INPUT);
-					delay(100);
-					//esp_sleep_enable_timer_wakeup(53LL * 60 * uS_TO_S_FACTOR);
-					esp_sleep_enable_timer_wakeup(23LL * 60 * uS_TO_S_FACTOR);
-					esp_deep_sleep_start();
-				}
+			if (avg1.average() < setTemp - 100) { 
+				digitalWrite(pins.relay	, 0);
 			}
 		}
 
-		if(loopCount++ > 30) { 
-			if (WiFi.status() != WL_CONNECTED) {
-				dbg("NEVER CONNECTED, REBOOTING");
-				//ESP.restart();
-			}
-			dbg("TOO MANY RETRIES, SLEEPING");
-			digitalWrite(pins.led, 0);
-			pinMode(pins.powerControlPin, INPUT);
-			delay(100);
-			esp_sleep_enable_timer_wakeup(300LL * uS_TO_S_FACTOR);
-			esp_deep_sleep_start();
+		if (temp > 40.00) { 
+			heat = 0;
 		}
-	}
+		if (temp > 20 && temp < 39.00) { 
+			heat = 1;
+		}
+		tempAdjust(heat ? 65 : 50);
+
+		//dbg("OUTPUT %d", digitalRead(p));
+		dbg("instADC: %6.1f avgADC: %6.1f temp: %6.2f heat: %d", avgAnalogRead(pins.tempSense), 
+			avg1.average(), temp, heat);
+	
+		//dbg("%d %s    " __BASE_FILE__ "   " __DATE__ "   " __TIME__, (int)(millis() / 1000), WiFi.localIP().toString().c_str());
+	
+	}	
 	delay(50);
 }
 
