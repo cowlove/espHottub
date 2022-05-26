@@ -32,9 +32,7 @@ int heat = 0;
 void loop() {
 	j.run();
 
-	//Serial.printf("%d %d %f\n", pi, pattern, led.get());
 	if (blink.tick()) { 
-		//digitalToggle(pins.led);
 		avg1.add(avgAnalogRead(pins.tempSense));	
 	}	
 	
