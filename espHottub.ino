@@ -22,6 +22,7 @@ void setup() {
 
 CLI_VARIABLE_FLOAT(setTemp, 40.5);
 CLI_VARIABLE_FLOAT(hist, 0.15);
+CLI_VARIABLE_STRING(test, "test");
 
 TwoStageRollingAverage<float,300,10> avg1;
 int heat = 0;
@@ -48,6 +49,16 @@ void loop() {
 			avg1.average(), temp, heat);
 	
 	}	
+
+	if (1) { // little csim test  
+		pinMode(17, INPUT);
+		if (digitalRead(17) == 0 && (String)test != String("")) {
+			String s = test; 
+			OUT("test value is %s", s.c_str());
+			test = "";
+		}
+	}
+
 	delay(10);
 }
 
