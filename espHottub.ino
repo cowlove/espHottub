@@ -3,9 +3,6 @@
 
 JStuff j;
 
-
-
-
 struct {
 	int tempSense = 35;
 	int tempAdjust = 18;

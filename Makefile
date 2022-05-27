@@ -1,7 +1,7 @@
 BOARD=esp32doit-devkit-v1
 #BOARD=heltec_wifi_lora_32
 #BOARD=nodemcu-32s
-#VERBOSE=1
+VERBOSE=1
 MONITOR_SPEED=921600
 
 GIT_VERSION := "$(shell git describe --abbrev=8 --dirty --always --tags)"
@@ -36,3 +36,8 @@ crctest:
 	echo Should show fb1b0400230a280100
 	./crc16heater_test fb1b0400230a280100
 
+
+${MAIN_NAME}_csim:	${MAIN_NAME}.ino ${HOME}/Arduino/libraries/jimlib/src/jimlib.h ${HOME}/Arduino/libraries/jimlib/src/ESP32sim_ubuntu.h
+	g++  -DGIT_VERSION=\"$(GIT_VERSION)\" -x c++ -g $< -o $@ -DESP8266 -DUBUNTU -I./ -I${HOME}/Arduino/libraries/jimlib/src 
+
+csim: ${MAIN_NAME}_csim 
