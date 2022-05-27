@@ -45,8 +45,8 @@ void loop() {
 		tempAdjust(heat ? 65 : 50);
 		j.led.setPattern(500, heat ? 0x6 : 0x4, 1.4);
 
-		OUT("instADC: %6.1f avgADC: %6.1f temp: %6.2f heat: %d", avgAnalogRead(pins.tempSense), 
-			avg1.average(), temp, heat);
+		OUT("instADC: %6.1f avgADC: %6.1f setTemp: %6.2f temp: %6.2f heat: %d", avgAnalogRead(pins.tempSense), 
+			avg1.average(), (float)setTemp, temp, heat);
 	
 	}	
 
