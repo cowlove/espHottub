@@ -42,7 +42,7 @@ void loop() {
 		} else if (temp > 20 && temp < setTemp - hist) { 
 			heat = 1;
 		}
-		tempAdjust(heat ? 65 : 50);
+		tempAdjust(heat ? 65 : -1);
 		j.led.setPattern(500, heat ? 0x6 : 0x4, 1.4);
 
 		OUT("instADC: %6.1f avgADC: %6.1f setTemp: %6.2f temp: %6.2f heat: %d", avgAnalogRead(pins.tempSense), 

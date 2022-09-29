@@ -11,7 +11,7 @@ backtrace:
 	tr ' ' '\n' | /home/jim/.arduino15/packages/esp32/tools/xtensa-esp32-elf-gcc/*/bin/xtensa-esp32-elf-addr2line -f -i -e ${BUILD_DIR}/${MAIN_NAME}.elf
 	
 CHIP=esp32
-OTA_ADDR=192.168.4.108
+OTA_ADDR=192.168.5.189
 IGNORE_STATE=1
 
 include ${HOME}/Arduino/libraries/makeEspArduino/makeEspArduino.mk
