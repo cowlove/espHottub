@@ -27,17 +27,16 @@ ConfPanelParamEnum p6(&cpc, &abLock, "A/B Locked", "OFF/ON");
 
 ConfPanelClient cpc1(1);
 ConfPanelParamFloat p9(&cpc1, &setTempC, "Set Temp C", 0.1);
-vector<ConfPanelClient *> clients;
-WiFiUDP udp;
+
+ConfPanelUdpTransport cup;
 
 void setup() {
 	j.begin();
 	j.cli.on("MINUTE", [](){ minute.alarmNow(); });
 	j.run();
-	udp.begin(4444);
 	cpc.addFloat(&setTempA, "TempA2");
-	clients.push_back(&cpc);
-	clients.push_back(&cpc1);
+	cup.add(&cpc);
+	cup.add(&cpc1);
 }
 
 CLI_VARIABLE_FLOAT(setTemp, 41);
@@ -50,6 +49,7 @@ int heat = 0;
 
 void loop() {
 	j.run();
+	cup.run();
    if (counterMode == 0) 
       counter += 1;
     if (counterMode == 1)
@@ -57,27 +57,6 @@ void loop() {
     if (abLock) 
       setTempB = setTempA; 
 
-	string s;
-    for (auto c : clients) 
-      s += c->readData();
-
-    if (s.length() > 0) {
-      udp.beginPacket("255.255.255.255", 4444);
-      udp.write((uint8_t *)s.c_str(), s.length());
-      udp.endPacket();
-    }
-
-    if (udp.parsePacket() > 0) {
-      char buf[1024];
-      static LineBuffer lb;
-      int n = udp.read((uint8_t *)buf, sizeof(buf));
-      lb.add((char *)buf, n, [](const char *line) { 
-        for (auto p : clients) { 
-          p->onRecv(line);
-        }
-      }); 
-	}
-   
 
 	if (blink.tick()) { 
 		avg1.add(avgAnalogRead(pins.tempSense));	

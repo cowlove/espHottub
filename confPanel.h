@@ -166,3 +166,41 @@ inline void ConfPanelClient::addFloat(float *ptr, const char *l, float i,
 inline void ConfPanelClient::addEnum(float *ptr, const char *l, const char *en, bool w) {
     new ConfPanelParamEnum(this, ptr, l, en, w);
 }
+
+
+class ConfPanelUdpTransport {
+    vector <ConfPanelClient *> clients;
+    WiFiUDP udp;
+    bool initialized = false;
+
+public:
+    void add(ConfPanelClient *p) { 
+        clients.push_back(p);
+    }
+    void run() { 
+        if (!initialized) { 
+           	udp.begin(4444);
+            initialized = true; 
+        }
+        string s;
+        for (auto c : clients) 
+            s += c->readData();
+
+        if (s.length() > 0) {
+        udp.beginPacket("255.255.255.255", 4444);
+        udp.write((uint8_t *)s.c_str(), s.length());
+        udp.endPacket();
+        }
+
+        if (udp.parsePacket() > 0) {
+            char buf[1024];
+            static LineBuffer lb;
+            int n = udp.read((uint8_t *)buf, sizeof(buf));
+            lb.add((char *)buf, n, [this](const char *line) { 
+                for (auto p : clients) { 
+                p->onRecv(line);
+                }
+            }); 
+        }   
+    }
+};
